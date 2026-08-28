@@ -50,11 +50,11 @@ GST_PRINCIPAL_ADDRESS = "N/A, Ghoshpara, Nischinda, Rabindranagar, Bally, Howrah
 GST_ADDITIONAL_ADDRESS = "2nd, 2C, Casa Del Tower 1, 2 No Govt Colony, Puja Sweets, 2 No Govt Colony Bazar, Uttarpara Kotrung, Hooghly, West Bengal, 712233"
 GST_VALID_FROM = "08/04/2022"
 
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Dip")
 # Default password is "changeme123" -- CHANGE THIS before going live (see README)
 ADMIN_PASSWORD_HASH = os.environ.get(
     "ADMIN_PASSWORD_HASH",
-    generate_password_hash(os.environ.get("ADMIN_PASSWORD", "changeme123"))
+    generate_password_hash(os.environ.get("ADMIN_PASSWORD", "Dip@123"))
 )
 
 
