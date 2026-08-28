@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}{{ SHOP_NAME }}{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Bebas+Neue&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="{% block bodyclass %}{% endblock %}">
+
+<header class="site-header">
+  <div class="stripe-top"></div>
+  <div class="header-inner">
+    <a class="brand" href="{{ url_for('index') }}">
+      <span class="brand-mark">JML</span>
+      <span class="brand-text">
+        <span class="brand-name">{{ SHOP_NAME }}</span>
+        <span class="brand-sub">Batteries &middot; Lubricants &middot; Auto Parts</span>
+      </span>
+    </a>
+    <span class="gst-chip" title="GSTIN {{ GST_NUMBER }}">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3.5v6c0 5-3 8.5-7 10.5-4-2-7-5.5-7-10.5v-6L12 2z"/><path d="M9 12l2 2 4-4"/></svg>
+      GST Registered
+    </span>
+    <nav class="main-nav">
+      <a href="{{ url_for('index') }}">Shop</a>
+      <a href="{{ url_for('index') }}#gst">GST Details</a>
+      <a href="{{ url_for('index') }}#contact">Contact</a>
+      <a href="tel:{{ SHOP_PHONE_1.replace(' ', '') }}" class="nav-call">Call {{ SHOP_PHONE_1 }}</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-wrap">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="site-footer" id="contact">
+  <div class="stripe-bottom"></div>
+  <div class="footer-inner">
+    <div class="footer-col">
+      <h3>{{ SHOP_NAME }}</h3>
+      <p>{{ SHOP_TAGLINE }}</p>
+    </div>
+    <div class="footer-col">
+      <h4>Reach us</h4>
+      <p>📞 {{ SHOP_PHONE_1 }} / {{ SHOP_PHONE_2 }}</p>
+      <p>✉️ {{ SHOP_EMAIL }}</p>
+      <p>📍 {{ SHOP_ADDRESS }}</p>
+    </div>
+    <div class="footer-col">
+      <h4>Shop</h4>
+      <a href="{{ url_for('index') }}">All products</a>
+      <a href="{{ url_for('index') }}#gst">GST details</a>
+      <a href="{{ url_for('admin_login') }}">Admin login</a>
+    </div>
+    <div class="footer-col">
+      <h4>GST registration</h4>
+      <p>GSTIN: <strong>{{ GST_NUMBER }}</strong></p>
+      <p>Legal name: {{ GST_LEGAL_NAME }}</p>
+      <p>{{ GST_CONSTITUTION }} &middot; Regular</p>
+    </div>
+  </div>
+  <div class="footer-bottom">&copy; {{ SHOP_NAME }} &mdash; Uttarpara, Hooghly &middot; GSTIN {{ GST_NUMBER }}</div>
+</footer>
+
+</body>
+</html>

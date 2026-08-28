@@ -1,0 +1,57 @@
+{% extends "admin_base.html" %}
+{% block title %}{{ 'Edit' if product else 'Add' }} product — Admin{% endblock %}
+{% set active = 'products' %}
+
+{% block admin_content %}
+<h1>{{ 'Edit product' if product else 'Add a new product' }}</h1>
+<form class="admin-form" method="post" enctype="multipart/form-data">
+  <label>Product name
+    <input type="text" name="name" required value="{{ product['name'] if product else '' }}">
+  </label>
+
+  <label>Category
+    <select name="category_id">
+      <option value="">— none —</option>
+      {% for c in categories %}
+        <option value="{{ c['id'] }}" {{ 'selected' if product and product['category_id']==c['id'] else '' }}>{{ c['name'] }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Product code (optional)
+    <input type="text" name="product_code" value="{{ product['product_code'] if product else '' }}">
+  </label>
+
+  <label>Price (₹)
+    <input type="number" step="0.01" name="price" required value="{{ product['price'] if product else '' }}">
+  </label>
+
+  <label>Warranty (optional)
+    <input type="text" name="warranty" placeholder="e.g. 24F+24P" value="{{ product['warranty'] if product else '' }}">
+  </label>
+
+  <label>Stock quantity
+    <input type="number" name="stock" value="{{ product['stock'] if product else 100 }}">
+  </label>
+
+  <label>Description
+    <textarea name="description" rows="4">{{ product['description'] if product else '' }}</textarea>
+  </label>
+
+  <label>Product photo
+    <input type="file" name="image" accept="image/*">
+  </label>
+  {% if product and product['image_filename'] %}
+    <img class="admin-thumb-preview" src="{{ url_for('static', filename='uploads/' ~ product['image_filename']) }}" alt="">
+  {% endif %}
+
+  {% if product %}
+  <label class="checkbox-label">
+    <input type="checkbox" name="is_active" {{ 'checked' if product['is_active'] else '' }}>
+    Visible on site
+  </label>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary btn-large">{{ 'Save changes' if product else 'Add product' }}</button>
+</form>
+{% endblock %}

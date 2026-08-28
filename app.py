@@ -1,17 +1,29 @@
 import os
-import sqlite3
+import re
 from datetime import datetime
 from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, g, abort
+    session, flash, abort
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
+from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
+from bson import ObjectId
+from bson.errors import InvalidId
+
+# Load a local .env file if python-dotenv is installed (handy for local dev).
+# On Render, environment variables are set in the dashboard instead, so this is a no-op there.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DB_PATH = os.path.join(BASE_DIR, "shop.db")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "gif"}
 
@@ -50,89 +62,68 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
 
 
+def now_str():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
 # ---------------------------------------------------------------------------
-# Database helpers
+# MongoDB connection
 # ---------------------------------------------------------------------------
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
-    return g.db
+# Locally this defaults to a MongoDB running on your own machine. In production
+# (Render), set MONGO_URI to your MongoDB Atlas connection string as an
+# environment variable -- see README for how to get one for free.
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/joymaalaxmi")
+
+mongo_client = MongoClient(MONGO_URI)
+# get_default_database() picks up the database name from the URI's path
+# (e.g. ".../joymaalaxmi"); fall back to a fixed name if the URI didn't include one.
+try:
+    db = mongo_client.get_default_database()
+except Exception:
+    db = None
+if db is None:
+    db = mongo_client["joymaalaxmi"]
+
+categories_col = db["categories"]
+products_col = db["products"]
+orders_col = db["orders"]
 
 
-@app.teardown_appcontext
-def close_db(exception=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
+def to_oid(id_str):
+    """Convert a string id from a URL into an ObjectId, or 404 if it's not valid."""
+    try:
+        return ObjectId(id_str)
+    except (InvalidId, TypeError):
+        abort(404)
 
 
+def serialize(doc):
+    """Add a plain string 'id' field (mirrors what the templates expect from the old SQLite rows)."""
+    if doc is None:
+        return None
+    doc["id"] = str(doc["_id"])
+    return doc
+
+
+def serialize_many(docs):
+    return [serialize(d) for d in docs]
+
+
+# ---------------------------------------------------------------------------
+# Database setup / seeding
+# ---------------------------------------------------------------------------
 def init_db():
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        );
-
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category_id INTEGER,
-            product_code TEXT,
-            description TEXT,
-            price REAL NOT NULL DEFAULT 0,
-            warranty TEXT,
-            stock INTEGER DEFAULT 100,
-            image_filename TEXT,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (category_id) REFERENCES categories(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            customer_name TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            email TEXT,
-            address TEXT NOT NULL,
-            notes TEXT,
-            status TEXT DEFAULT 'New',
-            stock_deducted INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            product_id INTEGER,
-            product_name TEXT NOT NULL,
-            quantity INTEGER NOT NULL DEFAULT 1,
-            price_each REAL NOT NULL DEFAULT 0,
-            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
-            FOREIGN KEY (product_id) REFERENCES products(id)
-        );
-        """
-    )
-    # Migration: add stock_deducted column for databases created before this feature existed.
-    try:
-        db.execute("ALTER TABLE orders ADD COLUMN stock_deducted INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass  # column already exists
-    db.commit()
-    db.close()
+    categories_col.create_index("name", unique=True)
+    products_col.create_index("product_code")
+    products_col.create_index("category_id")
+    products_col.create_index([("created_at", DESCENDING)])
+    orders_col.create_index([("created_at", DESCENDING)])
 
 
 def seed_db_if_empty():
     """Seed with categories + the SF Batteries price list so the site isn't empty on first run."""
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    count = db.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
-    if count > 0:
-        db.close()
+    if products_col.count_documents({}) > 0:
         return
 
     categories = [
@@ -141,8 +132,12 @@ def seed_db_if_empty():
     ]
     cat_ids = {}
     for c in categories:
-        cur = db.execute("INSERT INTO categories (name) VALUES (?)", (c,))
-        cat_ids[c] = cur.lastrowid
+        existing = categories_col.find_one({"name": c})
+        if existing:
+            cat_ids[c] = str(existing["_id"])
+        else:
+            result = categories_col.insert_one({"name": c})
+            cat_ids[c] = str(result.inserted_id)
 
     # A representative slice of the SF Batteries MRCP price list (10 June 2026)
     batteries = [
@@ -166,11 +161,18 @@ def seed_db_if_empty():
         ("2WL 2W Series 48 - 14Ah", "48S-14L-A2", "24F+24P", 3872, "2-Wheeler Batteries"),
     ]
     for name, code, warranty, price, cat in batteries:
-        db.execute(
-            """INSERT INTO products (name, category_id, product_code, description, price, warranty, image_filename)
-               VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-            (name, cat_ids[cat], code, f"SF Batteries {name}. MRCP as on 10th June 2026.", price, warranty),
-        )
+        products_col.insert_one({
+            "name": name,
+            "category_id": cat_ids[cat],
+            "product_code": code,
+            "description": f"SF Batteries {name}. MRCP as on 10th June 2026.",
+            "price": price,
+            "warranty": warranty,
+            "stock": 100,
+            "image_filename": None,
+            "is_active": True,
+            "created_at": now_str(),
+        })
 
     # Inverter batteries (SF Protubular / Protubular+ / Flat Plate / Exide Home Invamagic)
     inverter_batteries = [
@@ -190,12 +192,18 @@ def seed_db_if_empty():
         ("Exide Home Invamagic Hi Backup 400W 02:25", "48HBST2250", "24F+24P", 16898),
     ]
     for name, code, warranty, price in inverter_batteries:
-        db.execute(
-            """INSERT INTO products (name, category_id, product_code, description, price, warranty, image_filename)
-               VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-            (name, cat_ids["Inverter Batteries"], code,
-             f"{name}. MRCP inclusive of GST, effective 1st July 2026.", price, warranty),
-        )
+        products_col.insert_one({
+            "name": name,
+            "category_id": cat_ids["Inverter Batteries"],
+            "product_code": code,
+            "description": f"{name}. MRCP inclusive of GST, effective 1st July 2026.",
+            "price": price,
+            "warranty": warranty,
+            "stock": 100,
+            "image_filename": None,
+            "is_active": True,
+            "created_at": now_str(),
+        })
 
     # PowerSmart pure sine wave inverters / UPS units
     powersmart_inverters = [
@@ -218,15 +226,18 @@ def seed_db_if_empty():
         ("SF PowerSmart Sine Pro Plus 10KVA (180V)", "SNPP180V10000", "DSP Cu Pure Sine", "24M", 109294),
     ]
     for name, code, ptype, warranty, price in powersmart_inverters:
-        db.execute(
-            """INSERT INTO products (name, category_id, product_code, description, price, warranty, image_filename)
-               VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-            (name, cat_ids["Inverters (PowerSmart)"], code,
-             f"{name} — {ptype}. MRCP inclusive of GST, effective 1st July 2026.", price, warranty),
-        )
-
-    db.commit()
-    db.close()
+        products_col.insert_one({
+            "name": name,
+            "category_id": cat_ids["Inverters (PowerSmart)"],
+            "product_code": code,
+            "description": f"{name} — {ptype}. MRCP inclusive of GST, effective 1st July 2026.",
+            "price": price,
+            "warranty": warranty,
+            "stock": 100,
+            "image_filename": None,
+            "is_active": True,
+            "created_at": now_str(),
+        })
 
 
 # SUNOIL lubricants & greases price list (rates as on file, retail price used as customer price)
@@ -268,27 +279,36 @@ SUNOIL_LUBRICANTS = [
 
 def sync_lubricant_products():
     """Add the SUNOIL lubricants price list into 'Lubricants & Oils', skipping any already added."""
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    cat = db.execute("SELECT id FROM categories WHERE name = ?", ("Lubricants & Oils",)).fetchone()
+    cat = categories_col.find_one({"name": "Lubricants & Oils"})
     if not cat:
-        cur = db.execute("INSERT INTO categories (name) VALUES (?)", ("Lubricants & Oils",))
-        cat_id = cur.lastrowid
+        result = categories_col.insert_one({"name": "Lubricants & Oils"})
+        cat_id = str(result.inserted_id)
     else:
-        cat_id = cat["id"]
+        cat_id = str(cat["_id"])
 
     for code, name, pack, stock, price in SUNOIL_LUBRICANTS:
-        exists = db.execute("SELECT 1 FROM products WHERE product_code = ?", (code,)).fetchone()
-        if exists:
+        if products_col.find_one({"product_code": code}):
             continue
         full_name = f"{name} {pack}"
-        db.execute(
-            """INSERT INTO products (name, category_id, product_code, description, price, warranty, stock, image_filename)
-               VALUES (?, ?, ?, ?, ?, ?, ?, NULL)""",
-            (full_name, cat_id, code, f"{full_name}. SUNOIL retail price list.", price, None, stock),
-        )
-    db.commit()
-    db.close()
+        products_col.insert_one({
+            "name": full_name,
+            "category_id": cat_id,
+            "product_code": code,
+            "description": f"{full_name}. SUNOIL retail price list.",
+            "price": price,
+            "warranty": None,
+            "stock": stock,
+            "image_filename": None,
+            "is_active": True,
+            "created_at": now_str(),
+        })
+
+
+# Run setup once at import time so it also works when served by gunicorn
+# (gunicorn imports this module directly, it never hits the __main__ block below).
+init_db()
+seed_db_if_empty()
+sync_lubricant_products()
 
 
 # ---------------------------------------------------------------------------
@@ -326,22 +346,27 @@ def inject_shop_info():
 # ---------------------------------------------------------------------------
 @app.route("/")
 def index():
-    db = get_db()
-    categories = db.execute("SELECT * FROM categories ORDER BY name").fetchall()
-    selected_cat = request.args.get("category", type=int)
+    categories = serialize_many(list(categories_col.find().sort("name", ASCENDING)))
+
+    selected_cat = request.args.get("category") or None
+    if selected_cat:
+        try:
+            ObjectId(selected_cat)
+        except (InvalidId, TypeError):
+            selected_cat = None
     q = request.args.get("q", "").strip()
 
-    query = "SELECT * FROM products WHERE is_active = 1"
-    params = []
+    query = {"is_active": True}
     if selected_cat:
-        query += " AND category_id = ?"
-        params.append(selected_cat)
+        query["category_id"] = selected_cat
     if q:
-        query += " AND (name LIKE ? OR product_code LIKE ? OR description LIKE ?)"
-        like = f"%{q}%"
-        params += [like, like, like]
-    query += " ORDER BY created_at DESC"
-    products = db.execute(query, params).fetchall()
+        pattern = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [
+            {"name": pattern},
+            {"product_code": pattern},
+            {"description": pattern},
+        ]
+    products = serialize_many(list(products_col.find(query).sort("created_at", DESCENDING)))
 
     return render_template(
         "index.html",
@@ -352,23 +377,26 @@ def index():
     )
 
 
-@app.route("/product/<int:product_id>")
+@app.route("/product/<product_id>")
 def product_detail(product_id):
-    db = get_db()
-    product = db.execute("SELECT * FROM products WHERE id = ? AND is_active = 1", (product_id,)).fetchone()
+    oid = to_oid(product_id)
+    product = serialize(products_col.find_one({"_id": oid, "is_active": True}))
     if not product:
         abort(404)
-    related = db.execute(
-        "SELECT * FROM products WHERE category_id = ? AND id != ? AND is_active = 1 LIMIT 4",
-        (product["category_id"], product_id),
-    ).fetchall()
+    related = serialize_many(list(
+        products_col.find({
+            "category_id": product["category_id"],
+            "_id": {"$ne": oid},
+            "is_active": True,
+        }).limit(4)
+    ))
     return render_template("product.html", product=product, related=related)
 
 
-@app.route("/order/<int:product_id>", methods=["GET", "POST"])
+@app.route("/order/<product_id>", methods=["GET", "POST"])
 def order_product(product_id):
-    db = get_db()
-    product = db.execute("SELECT * FROM products WHERE id = ? AND is_active = 1", (product_id,)).fetchone()
+    oid = to_oid(product_id)
+    product = serialize(products_col.find_one({"_id": oid, "is_active": True}))
     if not product:
         abort(404)
 
@@ -387,29 +415,35 @@ def order_product(product_id):
             flash("Please fill in your name, phone number and address.", "error")
             return render_template("order_form.html", product=product)
 
-        cur = db.execute(
-            "INSERT INTO orders (customer_name, phone, email, address, notes) VALUES (?, ?, ?, ?, ?)",
-            (name, phone, email, address, notes),
-        )
-        order_id = cur.lastrowid
-        db.execute(
-            """INSERT INTO order_items (order_id, product_id, product_name, quantity, price_each)
-               VALUES (?, ?, ?, ?, ?)""",
-            (order_id, product["id"], product["name"], qty, product["price"]),
-        )
-        db.commit()
-        return redirect(url_for("order_success", order_id=order_id))
+        order_doc = {
+            "customer_name": name,
+            "phone": phone,
+            "email": email,
+            "address": address,
+            "notes": notes,
+            "status": "New",
+            "stock_deducted": False,
+            "created_at": now_str(),
+            "items": [{
+                "product_id": str(product["_id"]),
+                "product_name": product["name"],
+                "quantity": qty,
+                "price_each": product["price"],
+            }],
+        }
+        result = orders_col.insert_one(order_doc)
+        return redirect(url_for("order_success", order_id=str(result.inserted_id)))
 
     return render_template("order_form.html", product=product)
 
 
-@app.route("/order-success/<int:order_id>")
+@app.route("/order-success/<order_id>")
 def order_success(order_id):
-    db = get_db()
-    order = db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    oid = to_oid(order_id)
+    order = serialize(orders_col.find_one({"_id": oid}))
     if not order:
         abort(404)
-    items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
+    items = order.get("items", [])
     return render_template("order_success.html", order=order, items=items)
 
 
@@ -439,11 +473,10 @@ def admin_logout():
 @app.route("/admin")
 @login_required
 def admin_dashboard():
-    db = get_db()
-    order_count = db.execute("SELECT COUNT(*) c FROM orders").fetchone()["c"]
-    new_count = db.execute("SELECT COUNT(*) c FROM orders WHERE status = 'New'").fetchone()["c"]
-    product_count = db.execute("SELECT COUNT(*) c FROM products WHERE is_active = 1").fetchone()["c"]
-    recent_orders = db.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 6").fetchall()
+    order_count = orders_col.count_documents({})
+    new_count = orders_col.count_documents({"status": "New"})
+    product_count = products_col.count_documents({"is_active": True})
+    recent_orders = serialize_many(list(orders_col.find().sort("created_at", DESCENDING).limit(6)))
     return render_template(
         "admin_dashboard.html",
         order_count=order_count,
@@ -456,73 +489,74 @@ def admin_dashboard():
 @app.route("/admin/orders")
 @login_required
 def admin_orders():
-    db = get_db()
-    orders = db.execute("SELECT * FROM orders ORDER BY created_at DESC").fetchall()
-    orders_with_items = []
-    for o in orders:
-        items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (o["id"],)).fetchall()
-        orders_with_items.append((o, items))
+    orders = serialize_many(list(orders_col.find().sort("created_at", DESCENDING)))
+    orders_with_items = [(o, o.get("items", [])) for o in orders]
     return render_template("admin_orders.html", orders_with_items=orders_with_items)
 
 
-@app.route("/admin/orders/<int:order_id>/status", methods=["POST"])
+@app.route("/admin/orders/<order_id>/status", methods=["POST"])
 @login_required
 def admin_update_order_status(order_id):
+    oid = to_oid(order_id)
     new_status = request.form.get("status", "New")
-    db = get_db()
-    order = db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    order = orders_col.find_one({"_id": oid})
     if not order:
         abort(404)
 
-    was_delivered = order["status"] == "Delivered" and order["stock_deducted"]
+    was_delivered = order["status"] == "Delivered" and order.get("stock_deducted")
 
     if new_status == "Delivered" and not was_delivered:
         # Moving into "Delivered": deduct each ordered item's quantity from that product's stock.
-        items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
-        for item in items:
-            if item["product_id"] is not None:
-                db.execute(
-                    "UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?",
-                    (item["quantity"], item["product_id"]),
-                )
-        db.execute("UPDATE orders SET status = ?, stock_deducted = 1 WHERE id = ?", (new_status, order_id))
+        for item in order.get("items", []):
+            if item.get("product_id"):
+                product = products_col.find_one({"_id": ObjectId(item["product_id"])})
+                if product:
+                    new_stock = max(0, product.get("stock", 0) - item["quantity"])
+                    products_col.update_one(
+                        {"_id": product["_id"]},
+                        {"$set": {"stock": new_stock}},
+                    )
+        orders_col.update_one(
+            {"_id": oid},
+            {"$set": {"status": new_status, "stock_deducted": True}},
+        )
         flash("Order marked Delivered — stock updated.", "success")
     elif new_status != "Delivered" and was_delivered:
         # Moving OUT of "Delivered" (e.g. correcting a mistake): put the stock back.
-        items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
-        for item in items:
-            if item["product_id"] is not None:
-                db.execute(
-                    "UPDATE products SET stock = stock + ? WHERE id = ?",
-                    (item["quantity"], item["product_id"]),
-                )
-        db.execute("UPDATE orders SET status = ?, stock_deducted = 0 WHERE id = ?", (new_status, order_id))
+        for item in order.get("items", []):
+            if item.get("product_id"):
+                product = products_col.find_one({"_id": ObjectId(item["product_id"])})
+                if product:
+                    products_col.update_one(
+                        {"_id": product["_id"]},
+                        {"$set": {"stock": product.get("stock", 0) + item["quantity"]}},
+                    )
+        orders_col.update_one(
+            {"_id": oid},
+            {"$set": {"status": new_status, "stock_deducted": False}},
+        )
         flash("Order status updated — stock restored.", "success")
     else:
-        db.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
+        orders_col.update_one({"_id": oid}, {"$set": {"status": new_status}})
         flash("Order status updated.", "success")
 
-    db.commit()
     return redirect(url_for("admin_orders"))
 
 
 @app.route("/admin/products")
 @login_required
 def admin_products():
-    db = get_db()
-    products = db.execute(
-        """SELECT p.*, c.name AS category_name FROM products p
-           LEFT JOIN categories c ON p.category_id = c.id
-           ORDER BY p.created_at DESC"""
-    ).fetchall()
+    cat_map = {str(c["_id"]): c["name"] for c in categories_col.find()}
+    products = serialize_many(list(products_col.find().sort("created_at", DESCENDING)))
+    for p in products:
+        p["category_name"] = cat_map.get(p.get("category_id"))
     return render_template("admin_products.html", products=products)
 
 
 @app.route("/admin/products/new", methods=["GET", "POST"])
 @login_required
 def admin_add_product():
-    db = get_db()
-    categories = db.execute("SELECT * FROM categories ORDER BY name").fetchall()
+    categories = serialize_many(list(categories_col.find().sort("name", ASCENDING)))
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -551,25 +585,30 @@ def admin_add_product():
             flash("Product name is required.", "error")
             return render_template("admin_add_product.html", categories=categories, product=None)
 
-        db.execute(
-            """INSERT INTO products
-               (name, category_id, product_code, description, price, warranty, stock, image_filename)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, category_id, product_code, description, price, warranty, stock, image_filename),
-        )
-        db.commit()
+        products_col.insert_one({
+            "name": name,
+            "category_id": category_id,
+            "product_code": product_code,
+            "description": description,
+            "price": price,
+            "warranty": warranty,
+            "stock": stock,
+            "image_filename": image_filename,
+            "is_active": True,
+            "created_at": now_str(),
+        })
         flash(f'"{name}" was added.', "success")
         return redirect(url_for("admin_products"))
 
     return render_template("admin_add_product.html", categories=categories, product=None)
 
 
-@app.route("/admin/products/<int:product_id>/edit", methods=["GET", "POST"])
+@app.route("/admin/products/<product_id>/edit", methods=["GET", "POST"])
 @login_required
 def admin_edit_product(product_id):
-    db = get_db()
-    categories = db.execute("SELECT * FROM categories ORDER BY name").fetchall()
-    product = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+    oid = to_oid(product_id)
+    categories = serialize_many(list(categories_col.find().sort("name", ASCENDING)))
+    product = serialize(products_col.find_one({"_id": oid}))
     if not product:
         abort(404)
 
@@ -587,7 +626,7 @@ def admin_edit_product(product_id):
             stock = int(request.form.get("stock", 100))
         except ValueError:
             stock = 100
-        is_active = 1 if request.form.get("is_active") == "on" else 0
+        is_active = request.form.get("is_active") == "on"
 
         image_filename = product["image_filename"]
         file = request.files.get("image")
@@ -597,25 +636,31 @@ def admin_edit_product(product_id):
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], unique_name))
             image_filename = unique_name
 
-        db.execute(
-            """UPDATE products SET name=?, category_id=?, product_code=?, description=?,
-               price=?, warranty=?, stock=?, image_filename=?, is_active=? WHERE id=?""",
-            (name, category_id, product_code, description, price, warranty, stock,
-             image_filename, is_active, product_id),
+        products_col.update_one(
+            {"_id": oid},
+            {"$set": {
+                "name": name,
+                "category_id": category_id,
+                "product_code": product_code,
+                "description": description,
+                "price": price,
+                "warranty": warranty,
+                "stock": stock,
+                "image_filename": image_filename,
+                "is_active": is_active,
+            }},
         )
-        db.commit()
         flash(f'"{name}" was updated.', "success")
         return redirect(url_for("admin_products"))
 
     return render_template("admin_add_product.html", categories=categories, product=product)
 
 
-@app.route("/admin/products/<int:product_id>/delete", methods=["POST"])
+@app.route("/admin/products/<product_id>/delete", methods=["POST"])
 @login_required
 def admin_delete_product(product_id):
-    db = get_db()
-    db.execute("DELETE FROM products WHERE id = ?", (product_id,))
-    db.commit()
+    oid = to_oid(product_id)
+    products_col.delete_one({"_id": oid})
     flash("Product deleted.", "success")
     return redirect(url_for("admin_products"))
 
@@ -623,24 +668,20 @@ def admin_delete_product(product_id):
 @app.route("/admin/categories", methods=["GET", "POST"])
 @login_required
 def admin_categories():
-    db = get_db()
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         if name:
             try:
-                db.execute("INSERT INTO categories (name) VALUES (?)", (name,))
-                db.commit()
+                categories_col.insert_one({"name": name})
                 flash(f'Category "{name}" added.', "success")
-            except sqlite3.IntegrityError:
+            except DuplicateKeyError:
                 flash("That category already exists.", "error")
         return redirect(url_for("admin_categories"))
 
-    categories = db.execute("SELECT * FROM categories ORDER BY name").fetchall()
+    categories = serialize_many(list(categories_col.find().sort("name", ASCENDING)))
     return render_template("admin_categories.html", categories=categories)
 
 
 if __name__ == "__main__":
-    init_db()
-    seed_db_if_empty()
-    sync_lubricant_products()
+    # init_db() / seed_db_if_empty() / sync_lubricant_products() already ran at import time above.
     app.run(debug=True, host="0.0.0.0", port=5000)
