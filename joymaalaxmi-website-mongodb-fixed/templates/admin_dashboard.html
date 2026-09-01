@@ -1,0 +1,42 @@
+{% extends "admin_base.html" %}
+{% block title %}Dashboard — Admin{% endblock %}
+{% set active = 'dashboard' %}
+
+{% block admin_content %}
+<h1>Dashboard</h1>
+<div class="stat-grid">
+  <div class="stat-card">
+    <span class="stat-value">{{ order_count }}</span>
+    <span class="stat-label">Total orders</span>
+  </div>
+  <div class="stat-card highlight">
+    <span class="stat-value">{{ new_count }}</span>
+    <span class="stat-label">New orders</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value">{{ product_count }}</span>
+    <span class="stat-label">Active products</span>
+  </div>
+</div>
+
+<h2>Recent orders</h2>
+{% if recent_orders %}
+<table class="admin-table">
+  <thead><tr><th>#</th><th>Customer</th><th>Phone</th><th>Status</th><th>Placed</th></tr></thead>
+  <tbody>
+    {% for o in recent_orders %}
+    <tr>
+      <td>{{ o['id'] }}</td>
+      <td>{{ o['customer_name'] }}</td>
+      <td>{{ o['phone'] }}</td>
+      <td><span class="status-badge status-{{ o['status']|lower }}">{{ o['status'] }}</span></td>
+      <td>{{ o['created_at'] }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<a href="{{ url_for('admin_orders') }}" class="btn btn-ghost">View all orders</a>
+{% else %}
+<p class="muted">No orders yet.</p>
+{% endif %}
+{% endblock %}
