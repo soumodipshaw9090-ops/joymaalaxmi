@@ -1,11 +1,12 @@
 import os
 import re
+import base64
 from datetime import datetime
 from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, abort
+    session, flash, abort, Response
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -50,16 +51,33 @@ GST_PRINCIPAL_ADDRESS = "N/A, Ghoshpara, Nischinda, Rabindranagar, Bally, Howrah
 GST_ADDITIONAL_ADDRESS = "2nd, 2C, Casa Del Tower 1, 2 No Govt Colony, Puja Sweets, 2 No Govt Colony Bazar, Uttarpara Kotrung, Hooghly, West Bengal, 712233"
 GST_VALID_FROM = "08/04/2022"
 
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Dip")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 # Default password is "changeme123" -- CHANGE THIS before going live (see README)
 ADMIN_PASSWORD_HASH = os.environ.get(
     "ADMIN_PASSWORD_HASH",
-    generate_password_hash(os.environ.get("ADMIN_PASSWORD", "Dip@123"))
+    generate_password_hash(os.environ.get("ADMIN_PASSWORD", "changeme123"))
 )
 
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
+
+
+def file_to_mongo_image(file):
+    """Read an uploaded werkzeug FileStorage and return a dict ready to
+    store directly inside a MongoDB product document (base64-encoded bytes
+    plus the mimetype needed to serve it back out again)."""
+    raw = file.read()
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    mimetype = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "webp": "image/webp", "gif": "image/gif",
+    }.get(ext, file.mimetype or "application/octet-stream")
+    return {
+        "image_data": base64.b64encode(raw).decode("ascii"),
+        "image_mimetype": mimetype,
+        "image_filename": secure_filename(file.filename),  # kept only for display/alt text
+    }
 
 
 def now_str():
@@ -553,6 +571,22 @@ def admin_products():
     return render_template("admin_products.html", products=products)
 
 
+@app.route("/product-image/<product_id>")
+def product_image(product_id):
+    """Serve a product's photo straight out of MongoDB (no files on disk,
+    so it survives Render restarts/redeploys)."""
+    oid = to_oid(product_id)
+    product = products_col.find_one(
+        {"_id": oid}, {"image_data": 1, "image_mimetype": 1}
+    )
+    if not product or not product.get("image_data"):
+        abort(404)
+    raw = base64.b64decode(product["image_data"])
+    resp = Response(raw, mimetype=product.get("image_mimetype", "image/jpeg"))
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @app.route("/admin/products/new", methods=["GET", "POST"])
 @login_required
 def admin_add_product():
@@ -573,13 +607,10 @@ def admin_add_product():
         except ValueError:
             stock = 100
 
-        image_filename = None
+        image_fields = {"image_data": None, "image_mimetype": None, "image_filename": None}
         file = request.files.get("image")
         if file and file.filename and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            unique_name = f"{int(datetime.utcnow().timestamp())}_{filename}"
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], unique_name))
-            image_filename = unique_name
+            image_fields = file_to_mongo_image(file)
 
         if not name:
             flash("Product name is required.", "error")
@@ -593,7 +624,7 @@ def admin_add_product():
             "price": price,
             "warranty": warranty,
             "stock": stock,
-            "image_filename": image_filename,
+            **image_fields,
             "is_active": True,
             "created_at": now_str(),
         })
@@ -628,13 +659,15 @@ def admin_edit_product(product_id):
             stock = 100
         is_active = request.form.get("is_active") == "on"
 
-        image_filename = product["image_filename"]
+        # Keep the existing stored image unless a new file was uploaded.
+        image_fields = {
+            "image_data": product.get("image_data"),
+            "image_mimetype": product.get("image_mimetype"),
+            "image_filename": product.get("image_filename"),
+        }
         file = request.files.get("image")
         if file and file.filename and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            unique_name = f"{int(datetime.utcnow().timestamp())}_{filename}"
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], unique_name))
-            image_filename = unique_name
+            image_fields = file_to_mongo_image(file)
 
         products_col.update_one(
             {"_id": oid},
@@ -646,7 +679,7 @@ def admin_edit_product(product_id):
                 "price": price,
                 "warranty": warranty,
                 "stock": stock,
-                "image_filename": image_filename,
+                **image_fields,
                 "is_active": is_active,
             }},
         )
