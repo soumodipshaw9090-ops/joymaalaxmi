@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Order {{ product['name'] }} — {{ SHOP_NAME }}{% endblock %}
+
+{% block content %}
+<section class="order-section">
+  <div class="order-summary">
+    <h2>Your order</h2>
+    <div class="order-line">
+      <span>{{ product['name'] }}</span>
+      <span>₹{{ "%.0f"|format(product['price']) }}</span>
+    </div>
+    {% if product['product_code'] %}<p class="muted">Code: {{ product['product_code'] }}</p>{% endif %}
+  </div>
+
+  <form class="order-form" method="post">
+    <h2>Delivery details</h2>
+    <label>Full name
+      <input type="text" name="customer_name" required>
+    </label>
+    <label>Phone number
+      <input type="tel" name="phone" required>
+    </label>
+    <label>Email (optional)
+      <input type="email" name="email">
+    </label>
+    <label>Delivery address
+      <textarea name="address" rows="3" required></textarea>
+    </label>
+    <label>Quantity
+      <input type="number" name="quantity" value="1" min="1">
+    </label>
+    <label>Notes (optional)
+      <textarea name="notes" rows="2" placeholder="Any special requests..."></textarea>
+    </label>
+    <button type="submit" class="btn btn-primary btn-large">Place order</button>
+    <p class="muted small">We'll call you to confirm the order and delivery. You can also just call us at {{ SHOP_PHONE_1 }}.</p>
+  </form>
+</section>
+{% endblock %}

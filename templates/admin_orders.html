@@ -1,0 +1,39 @@
+{% extends "admin_base.html" %}
+{% block title %}Orders — Admin{% endblock %}
+{% set active = 'orders' %}
+
+{% block admin_content %}
+<h1>Orders</h1>
+{% if orders_with_items %}
+  {% for o, items in orders_with_items %}
+  <div class="order-card">
+    <div class="order-card-head">
+      <div>
+        <strong>Order #{{ o['id'] }}</strong> &middot; {{ o['created_at'] }}
+      </div>
+      <form method="post" action="{{ url_for('admin_update_order_status', order_id=o['id']) }}" class="status-form">
+        <select name="status" onchange="this.form.submit()">
+          {% for s in ['New', 'Confirmed', 'Delivered', 'Cancelled'] %}
+            <option value="{{ s }}" {{ 'selected' if o['status']==s else '' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+    <div class="order-card-body">
+      <div>
+        <p><strong>{{ o['customer_name'] }}</strong> &middot; {{ o['phone'] }} {% if o['email'] %}&middot; {{ o['email'] }}{% endif %}</p>
+        <p class="muted">{{ o['address'] }}</p>
+        {% if o['notes'] %}<p class="muted">Note: {{ o['notes'] }}</p>{% endif %}
+      </div>
+      <ul class="order-items-list">
+        {% for item in items %}
+          <li>{{ item['product_name'] }} &times; {{ item['quantity'] }} — ₹{{ "%.0f"|format(item['price_each'] * item['quantity']) }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+<p class="muted">No orders yet.</p>
+{% endif %}
+{% endblock %}
