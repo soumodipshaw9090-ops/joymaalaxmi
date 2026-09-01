@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: joymaalaxmi-website
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: MONGO_URI
+        sync: false        # paste your MongoDB Atlas connection string in the Render dashboard
+      - key: ADMIN_USERNAME
+        sync: false        # set your own admin username in the Render dashboard
+      - key: ADMIN_PASSWORD
+        sync: false        # set a strong admin password in the Render dashboard
+    healthCheckPath: /
