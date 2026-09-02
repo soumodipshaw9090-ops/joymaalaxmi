@@ -713,7 +713,10 @@ def admin_categories():
 
     categories = serialize_many(list(categories_col.find().sort("name", ASCENDING)))
     return render_template("admin_categories.html", categories=categories)
-
+    
+@app.route('/google4f17c1193746bef8.html')
+defgoogle_verify():
+   return"google-site-verification: google4f17c1193746bef8.html"
 
 if __name__ == "__main__":
     # init_db() / seed_db_if_empty() / sync_lubricant_products() already ran at import time above.
