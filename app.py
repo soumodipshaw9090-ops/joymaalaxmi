@@ -715,7 +715,7 @@ def admin_categories():
     return render_template("admin_categories.html", categories=categories)
     
 @app.route('/google4f17c1193746bef8.html')
-defgoogle_verify():
+def google_verify():
    return"google-site-verification: google4f17c1193746bef8.html"
 
 if __name__ == "__main__":
