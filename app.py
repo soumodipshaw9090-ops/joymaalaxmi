@@ -47,8 +47,7 @@ SHOP_ADDRESS = "23, G.T Road, Uttarpara, Hooghly - 712258, West Bengal, India"
 GST_NUMBER = "19BKZPD8808D1ZO"
 GST_LEGAL_NAME = "Dipsankar Das"
 GST_CONSTITUTION = "Proprietorship"
-GST_PRINCIPAL_ADDRESS = "N/A, Ghoshpara, Nischinda, Rabindranagar, Bally, Howrah, West Bengal, 711227"
-GST_ADDITIONAL_ADDRESS = "2nd, 2C, Casa Del Tower 1, 2 No Govt Colony, Puja Sweets, 2 No Govt Colony Bazar, Uttarpara Kotrung, Hooghly, West Bengal, 712233"
+GST_PRINCIPAL_ADDRESS = "23, G.T Road, Uttarpara, Hooghly - 712258, West Bengal, India"
 GST_VALID_FROM = "08/04/2022"
 
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Dip")
