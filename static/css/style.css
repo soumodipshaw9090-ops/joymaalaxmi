@@ -129,11 +129,13 @@ img { max-width: 100%; display: block; }
 
 /* ---------- Hero ---------- */
 .hero {
-  background:
-    radial-gradient(ellipse 900px 500px at 20% -10%, rgba(210,43,34,0.18), transparent 60%),
-    radial-gradient(ellipse 700px 500px at 100% 10%, rgba(255,255,255,0.35), transparent 55%),
-    linear-gradient(160deg, var(--yellow-pale), var(--yellow) 55%, var(--yellow-deep));
-  color: var(--charcoal);
+  background-image: 
+    linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.65)),
+    url('/static/images/1000038604.jpg'); 
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  color: #ffffff;
   position: relative;
   overflow: hidden;
 }
