@@ -36,7 +36,7 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8MB uploads
 # ---------------------------------------------------------------------------
 # Shop / admin settings (edit these for your shop, or move to a config file)
 # ---------------------------------------------------------------------------
-SHOP_NAME = "Joy Maa Laxmi Enterprises"
+SHOP_NAME = "Joy Maa Laxmi Enterprise"
 SHOP_TAGLINE = "Wheeling and dealing in slick lubricants and every auto part under the sun!"
 SHOP_PHONE_1 = "+91 7439297237"
 SHOP_PHONE_2 = "+91 6289388558"
