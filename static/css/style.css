@@ -183,7 +183,7 @@ img { max-width: 100%; display: block; }
 
 .trust-bar {
   display: flex; justify-content: center; gap: 28px; flex-wrap: wrap;
-  margin-top: 44px; padding-top: 28px; border-top: 1px solid rgba(225,225,0,0.12);
+  margin-top: 44px; padding-top: 28px; border-top: 1px solid rgba(225,225,0,1);
 }
 .trust-item {
   display: flex; align-items: center; gap: 8px;
