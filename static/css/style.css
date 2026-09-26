@@ -130,7 +130,7 @@ img { max-width: 100%; display: block; }
 /* ---------- Hero ---------- */
 .hero {
   background-image: 
-    linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.65)),
+    linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)),
     url('/static/images/1000038604.jpg'); 
   background-size: cover;
   background-position: center;
