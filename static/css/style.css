@@ -207,7 +207,7 @@ img { max-width: 100%; display: block; }
 .btn-primary:hover { background: var(--red-dark); box-shadow: 0 14px 32px rgba(210,43,34,0.45); }
 .btn-ghost { background: transparent; border-color: #6b6459; color: inherit; }
 .btn-ghost:hover { border-color: var(--amber); color: var(--amber); }
-.hero .btn-ghost { border-color: rgba(34,29,26,0.35); color:#ffffff; }
+.hero .btn-ghost { border-color: rgba(255,0,0,0); color:#ffffff; }
 .hero .btn-ghost:hover { border-color: var(--red); color: var(--red); }
 .btn-large { padding: 15px 30px; font-size: 1rem; }
 
